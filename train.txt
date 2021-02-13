@@ -1,0 +1,1 @@
+python train_retrieval.py -c  config/retrieval/paper2020/bksnmovies_100m_coot.yaml --load_model provided_models/yc2_100m_coot.pth --validate --data_path data
