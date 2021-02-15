@@ -47,7 +47,7 @@ def getVisualSents(start = -1, end = -1, num = 50, labels=[]):
         a = 0
         index  = end-1
     while counter < num and index in range(a,b):
-        if isVisual(labels[str(index)]):
+        if 'visual' in labels[str(index)]:
             counter += 1
             if start == -1: ids = [index] + ids # if there is no start, append backwards
             else: ids.append(index)
@@ -70,24 +70,14 @@ dataset_path = '/data/vision/torralba/datasets/movies/data/'
 bksnmvs_path = '/data/vision/torralba/frames/data_acquisition/booksmovies/data/booksandmovies/'
 anno_path = '{}/antonio/annotation/'.format(bksnmvs_path)
 text_annotation_path = '/data/vision/torralba/movies-books/booksandmovies/joanna/bksnmovies/data/gt_alignment/consecutive_text_labels_v2'
+dialog_anno = json.load(open('../data/bksnmovies/dialog_anno.json', 'r'))
 labeled_sents = json.load(open('../data/bksnmovies/labeled_sents.json', 'r'))
 movies = ['American.Psycho','Brokeback.Mountain','Fight.Club','Gone.Girl','Harry.Potter.and.the.Sorcerers.Stone','No.Country.for.Old.Men','One.Flew.Over.the.Cuckoo.Nest','Shawshank.Redemption','The.Firm','The.Green.Mile','The.Road']
 movies_titles = [movie.replace('.', '_') for movie in movies]
 imbds = ['tt0144084','tt0388795','tt0137523','tt2267998','tt0241527','tt0477348','tt0073486','tt0111161','tt0106918','tt0120689','tt0898367']
-dataset_split = 1 # 1 for 90% data from all movies in train and 10% in val; 2 for n-1 movies in train 1 in val
+dataset_split = 2 # 1 for 90% data from all movies in train and 10% in val; 2 for n-1 movies in train 1 in val
 val_movie = movies[0]
-'''
-    GROUND-TRUTH
-'''
 
-'''
-{'duration': 122.56, 
-'subset': 'validation', 
-'recipe_type': '113', 
-'annotations': [{'segment': [16, 25], 'id': 0, 
-'sentence': 'melt butter in a pan'}, 
-{'segment': [31, 34], 'id': 1, 'sentence': 'place the bread in the pan'}, {'segment': [37, 41], 'id': 2, 'sentence': 'flip the slices of bread over'}, {'segment': [43, 51], 'id': 3, 'sentence': 'spread mustard on the bread'}, {'segment': [51, 57], 'id': 4, 'sentence': 'place cheese on the bread'}, {'segment': [57, 60], 'id': 5, 'sentence': 'place the bread on top of the bread'}], 'video_url': 'https://www.youtube.com/watch?v=oDsUh1es_lo'}
-'''
 
 
 # Ground-truth annotations
@@ -102,7 +92,7 @@ for i, movie in enumerate(movies):
     title = movies_titles[i]
     imbd = imbds[i]
 
-    labels = labeled_sents[movie]
+    labels = dialog_anno[movie]
     ### SCENE AND SHOTS
 
     # Load shot info
@@ -218,7 +208,12 @@ for i, movie in enumerate(movies):
     for scene_key in seen_scenes:
         id_scene = int(scene_key.split('_')[1])
         annos = coot['database'][scene_key]['annotations']
+        
         first_sent, last_sent = annos[0]['id_sentence'], annos[-1]['id_sentence']
+        if first_sent > last_sent: # swap
+            aux = last_sent
+            last_sent = first_sent
+            first_sent = aux
         first_shot, last_shot = annos[0]['id_shot'], annos[-1]['id_shot']
         start_scene_shot, end_scene_shot = scene_df['start_shot'][id_scene], scene_df['end_shot'][id_scene]
         num_sents_left = first_shot - start_scene_shot
@@ -227,6 +222,7 @@ for i, movie in enumerate(movies):
         id_sents.extend(getVisualSents(end=first_sent, num=num_sents_left, labels=labels))
         id_sents.extend(getVisualSents(start=first_sent, end=last_sent, labels=labels))
         id_sents.extend(getVisualSents(start=last_sent, num=num_sents_right, labels=labels))
+        print(len(id_sents))
         # Add a bag of positive candidates for gt alignment
         if len(id_sents) > 0:
             text_data[scene_key] = {id_sent:book_file['book']['sentences'].item()['sentence'][id_sent][0][0] for id_sent in id_sents}
@@ -234,29 +230,39 @@ for i, movie in enumerate(movies):
             vid_data[scene_key] = {id_shot:[shot_df['rel_start_time'][id_shot], shot_df['rel_end_time'][id_shot]] for id_shot in range(start_scene_shot, end_scene_shot+1)}
             pos_data[scene_key] = []
             window = 6
-            for anno in annos:
+            for anno_num, anno in enumerate(annos):
                 # id of original shot and sentence ground-truth annotation
                 id_shot = anno['id_shot']
                 id_sentence = anno['id_sentence']
+                # if sentence is not visual, assign the closest visual sentence
+                # and find the 6 nearest sentences
+                
                 # find index in id_sents
                 index_sentence = locateInVector(id_sentence, id_sents)
                 # get positive sentence indexes
-                positive_index_sentences = list(range(max(0, index_sentence-3), min(len(id_sents)-1, index_sentence+3)))
+                positive_index_sentences = list(range(max(0, index_sentence-2), min(len(id_sents)-1, index_sentence+2)))
                 # get positive sentence ids
                 positive_sentences = [id_sents[index] for index in positive_index_sentences]
                 if anno['type'][1] == 0: # if not visual, also add positive surrounding shots
-                    positive_shots = list(range(max(start_scene_shot, id_shot - 3), min(end_scene_shot, id_shot + 3)))
+                    positive_shots = list(range(max(start_scene_shot, id_shot - 2), min(end_scene_shot, id_shot + 2)))
                 else: # if visual, only the given shot
                     positive_shots = [id_shot]
-                pos_data[scene_key].append({'positive_shots':positive_shots, 'positive_sentences':positive_sentences})
-
+                    
+                    
+                    
+                    
+                    
+                if len(positive_sentences) != 0:
+                    pos_data[scene_key].append({'anno_num': anno_num,'positive_shots':positive_shots, 'positive_sentences':positive_sentences})
 
 coot2 = defaultdict(dict)
 for k,v in coot['database'].items():
     if k in pos_data.keys(): coot2['database'][k] = v
+
 json.dump(coot2, open('../annotations/bksnmovies/bknmovies_v0_split_{}_nonempty.json'.format(dataset_split), 'w'))
 
 
 json.dump(text_data, open('../annotations/bksnmovies/text_data.json', 'w'))
+json.dump(text_data, open('../data/bksnmovies/text_data.json', 'w'))
 json.dump(vid_data, open('../annotations/bksnmovies/vid_data.json', 'w'))
 json.dump(pos_data, open('../annotations/bksnmovies/pos_data.json', 'w'))
