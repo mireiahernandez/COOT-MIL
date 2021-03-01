@@ -58,19 +58,13 @@ def main():
         text_segs = [{"text":sent} for sent_id, sent in text_data[key].items()]
         vid_segs = [{"start_sec":clip[0], "stop_sec":clip[1]} for clip_id, clip in vid_data[key].items()]
 
-        # get dictionary from sentence id to index in the text_segs list
-        sent_id_to_index = {sent_id:index for index, (sent_id, sent) in enumerate(text_data[key].items())}
-        clip_id_to_index = {clip_id:index for index, (clip_id, clip) in enumerate(vid_data[key].items())}
-
+        # get positive bags
         positives = []
         for anno in pos_data[key]:
             bop = []
             for clip_id in anno['positive_shots']:
                 for sent_id in anno['positive_sentences']:
-                    try:
-                        bop.append((sent_id_to_index[str(sent_id)], clip_id_to_index[str(clip_id)]))
-                    except:
-                        ipdb.set_trace()
+                    bop.append((clip_id, sent_id))
             positives.append(bop)
 
         # create video meta

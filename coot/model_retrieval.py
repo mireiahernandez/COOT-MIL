@@ -5,12 +5,14 @@ COOT is 4 times dlbase.models.TransformerLegacy
 """
 
 import torch as th
+from torch import nn
 from torch.cuda.amp import autocast
 
 from coot.dataset_retrieval import RetrievalDataBatchTuple as Batch
 from coot.configs_retrieval import RetrievalConfig, RetrievalNetworksConst
 from nntrainer import models, typext
 
+import ipdb
 
 class RetrievalVisualEmbTuple(typext.TypedNamedTuple):
     """
@@ -82,7 +84,13 @@ class RetrievalModelManager(models.BaseModelManager):
                 self.model_dict[key] = models.TransformerLegacy(current_cfg, input_dims[key])
             else:
                 raise NotImplementedError(f"Coot model type {current_cfg.name} undefined")
-
+        '''
+        ######### MODIFIED!!! ################
+        # Parallelize
+        for key in self.model_dict.keys():
+            self.model_dict[key] = nn.DataParallel(self.model_dict[key])
+        #########################################
+        '''
     def encode_visual(self, batch: Batch) -> RetrievalVisualEmbTuple:
         """
         Encode visual features to visual embeddings.

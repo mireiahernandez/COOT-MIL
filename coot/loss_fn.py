@@ -97,7 +97,7 @@ class MILContrastiveLoss(nn.Module):
         self.max_violation = max_violation
         self.use_cuda = use_cuda
 
-    def forward(self, im, se, im_num, se_num, pos_sent_clip):
+    def forward(self, im, se, pos, neg):
         """
         Inputs shape (batch, embed_dim)
 
@@ -109,18 +109,23 @@ class MILContrastiveLoss(nn.Module):
         Returns:
             MIL-NCE loss (scalar)
         """
-        ipdb.set_trace()
-        n = im.shape[0] # batch size
-        x = th.matmul(im, s.t()).cuda() # shape (batch, batch)
-        x_diag = ( x * th.eye(x.shape[0]).cuda() ).sum(dim=1).reshape(-1,1) # shape (batch)
-        x_nondiag = x.flatten()[1:].view(n-1, n+1)[:,:-1].flatten().reshape(1,-1) # shape (1, n*n-n)
-        x_nondiag = th.cat(n*[x_nondiag],dim=0) # shape (n, n*n-n)
-        nominator = x_diag # shape (batch, 1)
-        denominator = th.cat([x_nondiag, x_diag], dim=1) # shape (batch, n*n -n +1)
         
-        nominator = th.logsumexp(nominator, dim=1) # shape (batch)
-        denominator = th.logsumexp(denominator, dim=1) # shape (batch)
-        return th.mean(denominator - nominator)
+
+        x = th.matmul(im, se.t()).cuda() # shape (batch, batch)
+        neg_samples = x.masked_select(neg).reshape(1,-1).cuda()
+        loss = th.Tensor(size=(len(pos),)).cuda()
+        for i, bag in enumerate(pos):
+            pos_samples = x.masked_select(bag.cuda()).reshape(1,-1).cuda() # select positive pairs for that bag
+
+            nominator = pos_samples.cuda()  # positive samples of that bag
+            denominator = th.cat([pos_samples, neg_samples], dim=1).cuda() # negative samples of that bag
+            
+            nominator = th.logsumexp(nominator, dim=1).cuda()
+            denominator = th.logsumexp(denominator, dim=1).cuda()
+            
+            loss[i] = denominator - nominator
+        
+        return th.mean(loss)
 
 
 

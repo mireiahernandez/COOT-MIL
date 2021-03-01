@@ -90,10 +90,12 @@ def main():
     data_file_only = f"{full_ident}.h5"
     data_file = text_features_path / data_file_only
 
+    '''
     if data_file.exists() and lengths_file.exists() and not args.force:
         print(f"{data_file} already exists. nothing to do.")
         return
-
+    '''
+    
     # Load pretrained model
     print("*" * 20, f"Loading model {model_name} from {args.model_source}")
     if args.model_source == "transformers":

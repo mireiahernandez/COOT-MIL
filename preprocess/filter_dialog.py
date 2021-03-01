@@ -14,7 +14,7 @@ from itertools import chain
     UTILITIES
 '''
 
-forbidden_verbs = ['said']
+forbidden_verbs = ['said, whispered, answered, asked']
 
 def convertTime(value):
     second = value%60

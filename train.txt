@@ -1,1 +1,1 @@
-python train_retrieval.py -c  config/retrieval/paper2020/bksnmovies_100m_coot.yaml --load_model provided_models/yc2_100m_coot.pth --validate --data_path data
+CUDA_VISIBLE_DEVICES=1,2 python train_retrieval.py -c  config/retrieval/paper2020/bksnmovies_100m_coot.yaml --data_path data --run_name pair --load_model /data/vision/torralba/scratch/mireiahe/coot-videotext/experiments/retrieval/default/yc2_100m_coot_run1/models/model_34.pth --workers 4

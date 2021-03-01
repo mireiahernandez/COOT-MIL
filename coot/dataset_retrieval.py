@@ -52,7 +52,7 @@ class RetrievalDataPointTuple(typext.TypedNamedTuple):
     sent_num: int
     sent_feat_list: List[th.Tensor]  # shapes (num_tokens_sent, text_feat_dim)
     sent_feat_len_list: List[int]
-    pos_sent_clip: List[th.Tensor] # list of bags of positive pairs (each bag shape (#pairs, 2) )
+    pos_clip_sent: List[th.Tensor] # list of bags of positive pairs (each bag shape (#pairs, 2) )
    
     # shape tests for tensors
     _shapes_dict = {
@@ -84,9 +84,9 @@ class RetrievalDataBatchTuple(typext.TypedNamedTuple):
     sent_feat: th.Tensor  # shapes (total_num_sents, max_num_feat_sent, text_feat_dim) dtype float
     sent_feat_mask: th.Tensor  # shapes (total_num_sents, max_num_feat_sent) dtype bool
     sent_feat_len: th.Tensor  # shapes (total_num_sents) dtype long
-    pos_bags: List[th.Tensor] # list of length total num of alignments and each tensor represents an alignment
-                              # i.e., bag of positive candidates of shape (#pairs, 2)
-
+    pos: List[th.BoolTensor] # list of length total num of alignments and each tensor has shape (#clips, #sents)
+                             # and represents a positive bag, i.e., tens[i,j]=True if (i,j) is a positive pair
+    neg: th.BoolTensor # tensor of shape (#clips, #sents) where True if (i,j) is a negative pair
     # shape tests for tensors
     _shapes_dict = {
         "vid_feat": (None, None, None),
@@ -196,7 +196,7 @@ class RetrievalDataset(th_data.Dataset):
                 seg["start_frame"] = start_frame
                 seg["num_frames"] = stop_frame - start_frame
                 num_segments += 1
-        ipdb.set_trace()
+
         print(f"Built metadata for {self.split}: {len(self.keys)} datapoints, {num_segments} segments. "
               f"Expanded {expansions} segments.")
 
@@ -336,12 +336,12 @@ class RetrievalDataset(th_data.Dataset):
             pointer += sent_cap_len
 
         #--------- load positive pairs ---------
-        pos_sent_clip = [th.IntTensor(bag) for bag in vid_dict["positives"]]
+        pos_clip_sent = [th.IntTensor(bag) for bag in vid_dict["positives"]]
 
         # return single datapoint
         return RetrievalDataPointTuple(
             key, data_key, sentences, vid_feat, vid_feat_len, par_feat, par_feat_len, clip_num,
-            clip_feat_list, clip_feat_len_list, sent_num, sent_feat_list, sent_feat_len_list, pos_sent_clip)
+            clip_feat_list, clip_feat_len_list, sent_num, sent_feat_list, sent_feat_len_list, pos_clip_sent)
 
     def collate_fn(self, data_batch: List[RetrievalDataPointTuple]):
         """
@@ -471,22 +471,28 @@ class RetrievalDataset(th_data.Dataset):
         #----------- collate positive bags ----------
         # it should be a boolean tensor of shape (#clips, #sents) with
         # tensor=True if (clip, sent) are positive
-        pos_bags = []
+        pos = []
+        neg = th.BoolTensor(size=(total_clip_num, total_sent_num))
+        neg[:,:] = True
+        clip_offsets = np.cumsum(list_clip_num)
+        sent_offsets = np.cumsum(list_sent_num)
         for i, d in enumerate(data_batch):
-            pos_sent_clip = d.pos_sent_clip #List[th.Tensor]
-            offset = [sent_num[i-1], clip_num[i-1]] if i > 0 else [0,0]
-            offset = th.IntTensor(offset).reshape(1,-1) # shape (2,1)
-            print(f"offset shape {offset.shape}")
-            print(f"offset {offset}")
-            for bag in pos_sent_clip: # bag has shape (2, #pairs)
-                print(f"bag {bag}")
-                print(f"bag shape {bag.shape}")
-                bag += offset
-                pos_bags.append(bag)
-
+            pos_clip_sent = d.pos_clip_sent #List[th.Tensor]
+            offset = [clip_offsets[i-1], sent_offsets[i-1]] if i > 0 else [0,0]
+            offset = th.IntTensor(offset).reshape(1,-1) # shape (1, 2)
+            for bag in pos_clip_sent: # bag has shape (#pairs, 2)
+                if bag.shape[0] > 0:
+                    bag += offset
+                    bag_tens = th.BoolTensor(size=(total_clip_num, total_sent_num))
+                    bag_tens[:,:] = False # initialize all false
+                    for pair in bag:
+                        bag_tens[pair[0], pair[1]] = True
+                        neg[pair[0],pair[1]] = False
+                    pos.append(bag_tens)
+        
         ret = RetrievalDataBatchTuple(
             key, data_key, sentences, vid_feat, vid_feat_mask, vid_feat_len, par_feat, par_feat_mask, par_feat_len,
-            clip_num, clip_feat, clip_feat_mask, clip_feat_len, sent_num, sent_feat, sent_feat_mask, sent_feat_len, pos_bags)
+            clip_num, clip_feat, clip_feat_mask, clip_feat_len, sent_num, sent_feat, sent_feat_mask, sent_feat_len, pos, neg)
         return ret
 
 
@@ -509,7 +515,6 @@ def create_retrieval_datasets_and_loaders(cfg: coot.configs_retrieval.RetrievalC
     train_set = RetrievalDataset(cfg.dataset_train, path_data)
     train_loader = nn_data.create_loader(
         train_set, cfg.dataset_train, cfg.train.batch_size, collate_fn=train_set.collate_fn)
-
     val_set = RetrievalDataset(cfg.dataset_val, path_data)
     val_loader = nn_data.create_loader(
         val_set, cfg.dataset_val, cfg.val.batch_size, collate_fn=val_set.collate_fn)

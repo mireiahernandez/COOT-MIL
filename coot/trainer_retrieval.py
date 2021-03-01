@@ -135,8 +135,7 @@ class RetrievalTrainer(trainer_base.BaseTrainer):
         return self.loss_contr(visual_emb, text_emb)
         
     def compute_local_align_loss(self, visual_emb: th.Tensor, text_emb: th.Tensor,
-                                clip_num: th.Tensor, sent_num: th.Tensor,
-                                pos_sent_clip:List[List[th.Tensor]]) -> th.Tensor:
+                                pos:List[th.BoolTensor], neg:th.BoolTensor) -> th.Tensor:
         """
         Compute alignment contrastive loss (Matching between visual and text features).
 
@@ -147,7 +146,7 @@ class RetrievalTrainer(trainer_base.BaseTrainer):
         Returns:
             Scalar loss.
         """
-        return self.loss_MILcontr(visual_emb, text_emb, clip_num, sent_num, pos_sent_clip)
+        return self.loss_MILcontr(visual_emb, text_emb, pos, neg)
 
     def compute_cluster_loss(self, visual_emb: th.Tensor, text_emb: th.Tensor) -> th.Tensor:
         """
@@ -164,9 +163,7 @@ class RetrievalTrainer(trainer_base.BaseTrainer):
 
     def compute_total_constrastive_loss(self, visual_data: model_retrieval.RetrievalVisualEmbTuple,
                                         text_data: model_retrieval.RetrievalTextEmbTuple,
-                                        clip_num: th.Tensor,
-                                        sent_num: th.Tensor,
-                                        pos_sent_clip: List[List[th.Tensor]]) -> th.Tensor:
+                                        pos:List[th.BoolTensor], neg:th.BoolTensor) -> th.Tensor:
         """
         Compute total contrastive loss depending on config.
 
@@ -190,7 +187,7 @@ class RetrievalTrainer(trainer_base.BaseTrainer):
         if cfg.weight_high != 0:
             loss += cfg.weight_high * self.compute_global_align_loss(vid_emb_norm, par_emb_norm)
         if cfg.weight_low != 0:
-            loss += cfg.weight_low * self.compute_local_align_loss(clip_emb_norm, sent_emb_norm, clip_num, sent_num, pos_sent_clip)
+            loss += cfg.weight_low * self.compute_local_align_loss(clip_emb_norm, sent_emb_norm, pos, neg)
         if cfg.weight_context != 0:
             loss += cfg.weight_context * self.compute_global_align_loss(vid_context_norm, par_context_norm)
         if cfg.weight_high_internal != 0:
@@ -284,14 +281,12 @@ class RetrievalTrainer(trainer_base.BaseTrainer):
                 with autocast(enabled=self.cfg.fp16_train):
                     visual_data = self.model_mgr.encode_visual(batch)
                     text_data = self.model_mgr.encode_text(batch)
-                    ipdb.set_trace()
                     if self.cfg.train.loss_func == LossesConst.CONTRASTIVE:
-                        contr_loss = self.compute_total_constrastive_loss(visual_data, text_data, batch.clip_num, batch.sent_num, batch.pos_sent_clip)
+                        contr_loss = self.compute_total_constrastive_loss(visual_data, text_data, batch.pos, batch.neg)
                     elif self.cfg.train.loss_func == LossesConst.CROSSENTROPY:
                         contr_loss = self.compute_total_ce_loss(visual_data, text_data)
-                    ###cc_loss = self.compute_cyclecons_loss(visual_data, text_data)
-                    ###loss = contr_loss + cc_loss
-                    loss = contr_loss
+                    cc_loss = self.compute_cyclecons_loss(visual_data, text_data)
+                    loss = contr_loss + cc_loss
                 self.hook_post_forward_step_timer()  # hook for step timing
 
                 # ---------- backward pass ----------
@@ -311,6 +306,7 @@ class RetrievalTrainer(trainer_base.BaseTrainer):
 
                 # post-step hook: gradient clipping, profile gpu, update metrics, count step, step LR scheduler, log
                 self.hook_post_step(step, loss, self.lr_scheduler.current_lr, additional_log=additional_log)
+
 
             # ---------- validation ----------
             do_val = self.check_is_val_epoch()
@@ -389,12 +385,12 @@ class RetrievalTrainer(trainer_base.BaseTrainer):
                 visual_data = self.model_mgr.encode_visual(batch)
                 text_data = self.model_mgr.encode_text(batch)
                 if self.cfg.train.loss_func == LossesConst.CONTRASTIVE:
-                        contr_loss = self.compute_total_constrastive_loss(visual_data, text_data, batch.clip_num, batch.sent_num, batch.pos_sent_clip)
+                        contr_loss = self.compute_total_constrastive_loss(visual_data, text_data, batch.pos, batch.neg)
                 elif self.cfg.train.loss_func == LossesConst.CROSSENTROPY:
                     contr_loss = self.compute_total_ce_loss(visual_data, text_data)
                 contr_loss_total += contr_loss
-                ###cc_loss = self.compute_cyclecons_loss(visual_data, text_data)
-                ###cc_loss_total += cc_loss
+                cc_loss = self.compute_cyclecons_loss(visual_data, text_data)
+                cc_loss_total += cc_loss
                 loss_total += contr_loss + cc_loss
 
             self.hook_post_forward_step_timer()
@@ -405,11 +401,16 @@ class RetrievalTrainer(trainer_base.BaseTrainer):
             all_data = {**visual_data.dict(), **text_data.dict()}
             for key in collect_keys:
                 emb = all_data.get(key)
-                # collect embeddings into list, on CPU otherwise the gpu runs OOM
+                # collect embedmdings into list, on CPU otherwise the gpu runs OOM
                 if data_collector.get(key) is None:
                     data_collector[key] = [emb.data.cpu()]
                 else:
                     data_collector[key] += [emb.data.cpu()]
+            # add positive bags
+            if data_collector.get("pos") is None:
+                data_collector["pos"] = [batch.pos]
+            else:
+                data_collector["pos"] += [batch.pos]
             pbar.update()
         pbar.close()
 
@@ -422,7 +423,7 @@ class RetrievalTrainer(trainer_base.BaseTrainer):
             # data_collector_norm[key] = F.normalize(data_collector[key])
             data_collector_norm[key] = data_collector[key] / (data_collector[key] * data_collector[key]).sum(
                 dim=-1).sqrt().unsqueeze(-1)
-
+        data_collector_norm["pos"] = data_collector["pos"]
         if save_embs:
             # save unnormalized embeddings
             os.makedirs(self.exp.path_embeddings, exist_ok=True)
@@ -453,10 +454,10 @@ class RetrievalTrainer(trainer_base.BaseTrainer):
         res_c2s, res_s2c, sum_cs_at_1, clipsent_results = None, None, None, None
         str_cs = ""
         if val_clips:
-            res_c2s, res_s2c, sum_cs_at_1, str_cs = retrieval.compute_retrieval(
-                data_collector_norm, "clip_emb", "sent_emb", print_fn=self.logger.info)
+            res_c2s, res_s2c, sum_cs_at_1, str_cs = retrieval.compute_retrieval_MIL(
+                data_collector_norm, "clip_emb", "sent_emb", "pos", print_fn=self.logger.info)
             clipsent_results = (res_c2s, res_s2c, sum_cs_at_1)
-
+        
         # feed retrieval results to meters
         for modality, dict_ret in zip(CMeters.RET_MODALITIES, [res_v2p, res_p2v, res_c2s, res_s2c]):
             if dict_ret is None:
@@ -487,6 +488,7 @@ class RetrievalTrainer(trainer_base.BaseTrainer):
 
         # check for a new best epoch and update validation results
         is_best = self.check_is_new_best(val_score)
+        print(type(is_best))
         self.hook_post_val_epoch(loss_total, is_best)
 
         if self.is_test:

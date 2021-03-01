@@ -11,6 +11,7 @@ from nntrainer import arguments, utils
 from nntrainer.utils_torch import set_seed
 from nntrainer.utils_yaml import load_yaml_config_file
 
+import ipdb
 
 EXP_TYPE = ExperimentTypesConst.RETRIEVAL
 
@@ -84,8 +85,10 @@ def main():
             trainer.validate_epoch(val_loader, val_clips=cfg.val.val_clips, save_embs=args.save_embeddings)
         else:
             # run training
-            trainer.train_model(train_loader, val_loader)
-
+            train_loss = trainer.train_model(train_loader, val_loader)
+        
+        # save train loss
+        ipdb.set_trace()
         # done with this round
         trainer.close()
         del model_mgr
